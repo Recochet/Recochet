@@ -1,0 +1,376 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <ctype.h>
+#include <assert.h>
+#include <unistd.h>
+
+#define INTSIZE	500	/* max number of digits per integer value */
+#define LINELEN	999	/* maximum length of any input line */
+#define NVARS	26	/* number of different variables */
+
+#define CH_A     'a'    /* character 'a', first variable name */
+
+#define ERROR	(-1)	/* error return value from some functions */
+#define PROMPT	"> "	/* the prompt string for interactive input */
+
+#define PRINT	'?'	/* the print operator */
+#define ASSIGN	'='	/* the assignment operator */
+#define PLUS	'+'	/* the addition operator */
+#define MULT	'*'	/* the multiplication operator */
+#define POWR	'^'	/* the power-of operator */
+#define DIVS	'/'	/* the division operator */
+#define ALLOPS  "?=+*^/"
+
+#define CH_ZERO  '0'    /* character zero */
+#define CH_ONE   '1'    /* character one */
+#define CH_NINE  '9'    /* character nine */
+
+#define CH_COM   ','    /* character ',' */
+#define PUT_COMMAS 3    /* interval between commas in output values */
+
+#define INT_ZERO 0	/* integer 0 */
+#define INT_TEN  10	/* integer 10 */
+
+
+#define MAX_RANGE 500
+typedef struct {
+	int size;
+	int values[MAX_RANGE];
+} longint_t;
+#define LONG_ZERO {.size = 1, .values = {0}}
+// #define LONG_ONE  1
+
+
+/****************************************************************/
+
+/* A "magic" additional function needing explicit declaration */
+int fileno(FILE *);
+
+/* Skeleton program function prototypes */
+
+void print_prompt(void);
+void print_tadaa();
+void print_error(char *message);
+int  read_line(char *line, int maxlen);
+void process_line(longint_t vars[], char *line);
+int  get_second_value(longint_t vars[], char *rhsarg,
+	longint_t *second_value);
+int  to_varnum(char ident);
+void do_print(int varnum, longint_t *var);
+void do_assign(longint_t *var1, longint_t *var2);
+void do_plus(longint_t *var1, longint_t *var2);
+void zero_vars(longint_t vars[]);
+longint_t parse_num(char *rhs);
+
+/****************************************************************/
+
+/* Main program controls all the action
+*/
+int
+main(int argc, char *argv[]) {
+	char line[LINELEN+1] = {0};
+	longint_t vars[NVARS];
+
+	zero_vars(vars);
+	print_prompt();
+	while (read_line(line, LINELEN)) {
+		if (strlen(line) > 0) {
+			/* non empty line, so process it */
+			process_line(vars, line);
+		}
+		print_prompt();
+	}
+
+	print_tadaa();
+	return 0;
+}
+
+/****************************************************************/
+
+void
+print_prompt(void) {
+	if (isatty(fileno(stdin))) {
+		fprintf(stderr, "> ");
+		fflush(stderr);
+	}
+}
+
+void
+print_tadaa() {
+	/* all done, so pack up bat and ball and head home,
+	   getting the exact final lines right is a bit tedious,
+	   because input might be coming from a file and output
+	   might be going to a file */
+	if (isatty(fileno(stdin)) && isatty(fileno(stdout))) {
+		printf("\n");
+	}
+	printf("ta daa!!!\n");
+	if (isatty(fileno(stdin)) && !isatty(fileno(stdout))) {
+		fprintf(stderr, "\n");
+	}
+}
+
+void
+print_error(char *message) {
+	/* need to write an error message to the right place(s)
+	*/
+	if (isatty(fileno(stdin)) || isatty(fileno(stdout))) {
+		fprintf(stderr, "%s\n", message);
+		fflush(stderr);
+	}
+	if (!isatty(fileno(stdout))) {
+		printf("%s\n", message);
+	}
+}
+
+/****************************************************************/
+
+/* Reads a line of input into the array passed as argument,
+   returns false if there is no input available.
+   All whitespace characters are removed on the way through.
+*/
+int
+read_line(char *line, int maxlen) {
+	int i=0, c;
+	while (((c=getchar())!=EOF) && (c!='\n')) {
+		if (i<maxlen && !isspace(c)) {
+			line[i++] = c;
+		}
+	}
+	line[i] = '\0';
+	/* then, if the input is coming from a file or the output
+	   is going to a file, it is helpful to echo the input line
+	   and record what the command was */
+	if (!isatty(fileno(stdin)) || !isatty(fileno(stdout))) {
+		printf("%s%s\n", PROMPT, line);
+	}
+	return ((i>0) || (c!=EOF));
+}
+
+/****************************************************************/
+
+/* Process a command by parsing the input line into parts
+*/
+void
+process_line(longint_t vars[], char *line) {
+	int varnum, optype, status;
+	longint_t second_value;
+
+	/* determine the LHS variable, it
+	   must be first character in compacted line
+	*/
+	varnum = to_varnum(line[0]);
+	if (varnum==ERROR) {
+		print_error("invalid LHS variable");
+		return;
+	}
+
+	/* more testing for validity 
+	*/
+	if (strlen(line)<2) {
+		print_error("no operator supplied");
+		return;
+	}
+
+	/* determine the operation to be performed, it
+	   must be second character of compacted line
+	*/
+	optype = line[1];
+	if (strchr(ALLOPS, optype) == NULL) {
+		print_error("unknown operator\n");
+		return;
+	}
+
+	/* determine the RHS argument (if one is required),
+	   it must start in the third character of compacted line
+	*/
+	if (optype != PRINT) {
+		if (strlen(line)<3) {
+			print_error("no RHS supplied");
+			return;
+		}
+		status = get_second_value(vars, line+2, &second_value);
+		if (status==ERROR) {
+			print_error("RHS argument is invalid");
+			return;
+		}
+	}
+
+	/* finally, do the actual operation
+	*/
+	if (optype == PRINT) {
+		do_print(varnum, vars+varnum);
+	} else if (optype == ASSIGN) {
+		do_assign(vars+varnum, &second_value);
+	} else if (optype == PLUS) {
+		do_plus(vars+varnum, &second_value);
+	// you will need to add further operators here
+	} else {
+		print_error("operation not available yet");
+		return;
+	}
+	return;
+}
+
+/****************************************************************/
+
+/* Convert a character variable identifier to a variable number
+*/
+int
+to_varnum(char ident) {
+	int varnum;
+	varnum = ident - CH_A;
+	if (0<=varnum && varnum<NVARS) {
+		return varnum;
+	} else {
+		return ERROR;
+	}
+}
+
+/****************************************************************/
+
+/* Process the input line to extract the RHS argument, which
+   should start at the pointer that is passed
+*/
+int
+get_second_value(longint_t vars[], char *rhsarg,
+			longint_t *second_value) {
+	char *p;
+	int varnum2;
+	if (isdigit(*rhsarg)) {
+		/* first character is a digit, so RHS is a number
+		   now check the rest of RHS for validity */
+		for (p=rhsarg+1; *p; p++) {
+			if (!isdigit(*p)) {
+				/* nope, found an illegal character */
+				return ERROR;
+			}
+		}
+		/* nothing wrong, ok to convert */
+		*second_value = parse_num(rhsarg);
+		return !ERROR;
+	} else {
+		/* argument is not a number, so should be a variable */
+		varnum2 = to_varnum(*rhsarg);
+		if (varnum2==ERROR || strlen(rhsarg)!=1) {
+			/* nope, not a variable either */
+			return ERROR;
+		}
+		/* and finally, get that variable's value */
+		do_assign(second_value, vars+varnum2);
+		return !ERROR;
+	}
+	return ERROR;
+}
+
+/* Set the vars array to all zero values
+*/
+void
+zero_vars(longint_t vars[]) {
+	int i;
+	for (i=0; i<NVARS; i++) {
+		vars[i].size = 1;
+		vars[i].values[0] = 0;
+	}
+	return;
+}
+
+/*****************************************************************
+******************************************************************
+
+Your answer to the assignment should start here, using your new
+typedef defined at the top of the program. The next few functions
+will require modifications because of the change of structure
+used for a long_int, and then you'll need to start adding whole
+new functions after you get these first ones working properly.
+Try and make the new functions fit the style and naming pattern
+of the existing ones, ok?
+
+******************************************************************
+*****************************************************************/
+
+/* Create an internal-format number out of a string
+*/
+longint_t
+parse_num(char *rhs) {
+	longint_t rv;
+	rv.size = strlen(rhs);
+	int i;
+	for (i = 0; i < rv.size; i++) {
+		rv.values[rv.size - i - 1] = rhs[i] - CH_ZERO;
+	}
+	return rv;
+}
+
+/****************************************************************/
+
+/* Print out a longint value
+*/
+void
+do_print(int varnum, longint_t *var) {
+	printf("register %c: ", varnum+CH_A);
+	int i;
+	for (i = 0; i < var->size; i++) {
+		printf("%c", var->values[var->size - i - 1] + CH_ZERO);
+	}
+	printf("\n");
+}
+
+/****************************************************************/
+
+/* Assign a longint value, could do this with just an assignment
+   statement, because structs can be assigned, but this is more
+   elegant, and only copies over the array elements (digits) that
+   are currently in use: var1 = var2
+*/
+void
+do_assign(longint_t *var1, longint_t *var2) {
+	var1->size = var2->size;
+	int i;
+	for (i = 0; i < var1->size; i++) {
+		var1->values[i] = var2->values[i];
+	}
+}
+
+/****************************************************************/
+
+/* Update the indicated variable var1 by doing an addition
+   using var2 to compute var1 = var1 + var2
+*/
+void
+do_plus(longint_t *var1, longint_t *var2) {
+	int i, max_size;
+	longint_t temp = LONG_ZERO;
+	if (var1->size > var2->size) {
+		max_size = var1->size;
+	} else {
+		max_size = var2->size;
+	}
+	for (i = 0; i < max_size; i++) {
+		temp.values[i] += var1->values[i] + var2->values[i];
+		if (temp.values[i] >= 10) {
+			temp.values[i + 1] += temp.values[i] / 10;
+			temp.values[i] = temp.values[i] % 10;
+		}
+	}
+	if (temp.values[max_size] != 0) {
+		temp.size = max_size + 1;
+	} else {
+		temp.size = max_size;
+	}
+	var1->size = temp.size;
+	for (int i = 0; i < temp.size; i++) {
+		var1->values[i] = temp.values[i];
+	}
+}
+
+/*****************************************************************
+******************************************************************
+
+Put your new functions below this line. Make sure you add suitable
+prototypes at the top of the program.
+
+******************************************************************
+*****************************************************************/
